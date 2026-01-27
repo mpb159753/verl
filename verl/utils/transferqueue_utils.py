@@ -18,6 +18,7 @@ import inspect
 import logging
 import os
 import threading
+import time
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -48,6 +49,10 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 _TRANSFER_QUEUE_CLIENT = None
 
 is_transferqueue_enabled = os.environ.get("TRANSFER_QUEUE_ENABLE", False)
+
+# TQ Performance Logging Configuration
+TQ_TRACE_ENABLED = os.getenv("TQ_TRACE_ENABLED", "0") == "1"
+TQ_TRACE_DETAIL_ENABLED = os.getenv("TQ_TRACE_DETAIL_ENABLED", "0") == "1"
 
 
 def create_transferqueue_client(
@@ -108,6 +113,41 @@ def _find_batchmeta(*args, **kwargs):
     return None
 
 
+def _estimate_tensordict_size(tensordict: TensorDict) -> float:
+    """估算TensorDict的内存大小(MB)
+    
+    Args:
+        tensordict: 需要估算大小的TensorDict对象
+        
+    Returns:
+        float: 估算的内存大小(MB)
+    """
+    total_bytes = 0
+    try:
+        for key, tensor in tensordict.items():
+            if hasattr(tensor, 'element_size') and hasattr(tensor, 'nelement'):
+                total_bytes += tensor.nelement() * tensor.element_size()
+    except Exception as e:
+        logger.debug(f"Failed to estimate tensordict size: {e}")
+        return 0.0
+    return total_bytes / (1024 * 1024)  # 转换为MB
+
+
+def _get_trace_id(batchmeta: "BatchMeta") -> str:
+    """从BatchMeta获取trace_id，如果不存在则返回N/A
+    
+    Args:
+        batchmeta: BatchMeta对象
+        
+    Returns:
+        str: trace_id或"N/A"
+    """
+    try:
+        return batchmeta.extra_info.get('trace_id', 'N/A')
+    except Exception:
+        return 'N/A'
+
+
 async def _async_batchmeta_to_dataproto(batchmeta: "BatchMeta") -> DataProto:
     if batchmeta.samples == [] or batchmeta.samples is None:
         return DataProto(
@@ -116,7 +156,29 @@ async def _async_batchmeta_to_dataproto(batchmeta: "BatchMeta") -> DataProto:
             meta_info=batchmeta.extra_info.copy(),
         )
 
+    # ========== 日志点: TQ Client Get调用 ==========
+    if TQ_TRACE_DETAIL_ENABLED:
+        get_client_start = time.perf_counter()
+        trace_id = _get_trace_id(batchmeta)
+        logger.debug(
+            f"[TQ-DETAIL] trace_id={trace_id} | "
+            f"stage=TQ_CLIENT_GET_START | "
+            f"batch_size={batchmeta.size} | timestamp={get_client_start:.6f}"
+        )
+
     tensordict = await _TRANSFER_QUEUE_CLIENT.async_get_data(batchmeta)
+
+    if TQ_TRACE_DETAIL_ENABLED:
+        get_client_end = time.perf_counter()
+        data_size = _estimate_tensordict_size(tensordict)
+        logger.debug(
+            f"[TQ-DETAIL] trace_id={trace_id} | "
+            f"stage=TQ_CLIENT_GET_END | "
+            f"duration={get_client_end - get_client_start:.6f}s | "
+            f"data_size_mb={data_size:.2f} | "
+            f"timestamp={get_client_end:.6f}"
+        )
+
     return DataProto.from_tensordict(tensordict, meta_info=batchmeta.extra_info.copy())
 
 
@@ -142,7 +204,35 @@ async def _async_update_batchmeta_with_output(output: DataProto, batchmeta: "Bat
             f"tensordict keys={list(tensordict.keys())}"
         )
 
+        # ========== 日志点: TQ Client Put调用 ==========
+        if TQ_TRACE_DETAIL_ENABLED:
+            put_client_start = time.perf_counter()
+            trace_id = _get_trace_id(batchmeta)
+            data_size = _estimate_tensordict_size(tensordict)
+            logger.debug(
+                f"[TQ-DETAIL] trace_id={trace_id} | "
+                f"func={func_name} | pid={pid} | "
+                f"stage=TQ_CLIENT_PUT_START | "
+                f"batch_size={tensordict.batch_size} | "
+                f"data_size_mb={data_size:.2f} | "
+                f"timestamp={put_client_start:.6f}"
+            )
+
         updated_batch_meta = await _TRANSFER_QUEUE_CLIENT.async_put(data=tensordict, metadata=batchmeta)
+
+        if TQ_TRACE_DETAIL_ENABLED:
+            put_client_end = time.perf_counter()
+            duration = put_client_end - put_client_start
+            throughput = data_size / duration if duration > 0 else 0
+            logger.debug(
+                f"[TQ-DETAIL] trace_id={trace_id} | "
+                f"func={func_name} | pid={pid} | "
+                f"stage=TQ_CLIENT_PUT_END | "
+                f"duration={duration:.6f}s | "
+                f"throughput_mbps={throughput:.2f} | "
+                f"timestamp={put_client_end:.6f}"
+            )
+
         return updated_batch_meta
     else:
         return batchmeta
@@ -293,19 +383,106 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
             if batchmeta is None:
                 return await func(*args, **kwargs)
             else:
+                # ========== 日志点1: 函数开始 ==========
+                if TQ_TRACE_ENABLED:
+                    start_time = time.perf_counter()
+                    trace_id = _get_trace_id(batchmeta)
+                    logger.info(
+                        f"[TQ-TRACE] trace_id={trace_id} | "
+                        f"func={func.__name__} | pid={pid} | "
+                        f"stage=FUNCTION_START | timestamp={start_time:.6f}"
+                    )
+                
                 logger.info(
                     f"Task {func.__name__} (pid={pid}) is getting len_samples={batchmeta.size}, "
                     f"global_idx={batchmeta.global_indexes}"
                 )
+                
+                # ========== 日志点2: Get数据开始 ==========
+                if TQ_TRACE_ENABLED:
+                    get_start = time.perf_counter()
+                    logger.info(
+                        f"[TQ-TRACE] trace_id={trace_id} | "
+                        f"func={func.__name__} | stage=GET_START | "
+                        f"batch_size={batchmeta.size} | timestamp={get_start:.6f}"
+                    )
+                
                 args = [await _async_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {
                     k: await _async_batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v
                     for k, v in kwargs.items()
                 }
+                
+                # ========== 日志点3: Get数据完成 ==========
+                if TQ_TRACE_ENABLED:
+                    get_end = time.perf_counter()
+                    logger.info(
+                        f"[TQ-TRACE] trace_id={trace_id} | "
+                        f"func={func.__name__} | stage=GET_END | "
+                        f"duration={get_end - get_start:.6f}s | timestamp={get_end:.6f}"
+                    )
+                
+                # ========== 日志点4: 业务逻辑开始 ==========
+                if TQ_TRACE_ENABLED:
+                    compute_start = time.perf_counter()
+                    logger.info(
+                        f"[TQ-TRACE] trace_id={trace_id} | "
+                        f"func={func.__name__} | stage=COMPUTE_START | timestamp={compute_start:.6f}"
+                    )
+                
                 output = await func(*args, **kwargs)
+                
+                # ========== 日志点5: 业务逻辑完成 ==========
+                if TQ_TRACE_ENABLED:
+                    compute_end = time.perf_counter()
+                    logger.info(
+                        f"[TQ-TRACE] trace_id={trace_id} | "
+                        f"func={func.__name__} | stage=COMPUTE_END | "
+                        f"duration={compute_end - compute_start:.6f}s | timestamp={compute_end:.6f}"
+                    )
+                
                 need_collect = _compute_need_collect(dispatch_mode, args)
                 if put_data and need_collect:
+                    # ========== 日志点6: Put数据开始 ==========
+                    if TQ_TRACE_ENABLED:
+                        put_start = time.perf_counter()
+                        logger.info(
+                            f"[TQ-TRACE] trace_id={trace_id} | "
+                            f"func={func.__name__} | stage=PUT_START | timestamp={put_start:.6f}"
+                        )
+                    
                     updated_batchmeta = await _async_update_batchmeta_with_output(output, batchmeta, func.__name__)
+                    
+                    # ========== 日志点7: Put数据完成 ==========
+                    if TQ_TRACE_ENABLED:
+                        put_end = time.perf_counter()
+                        logger.info(
+                            f"[TQ-TRACE] trace_id={trace_id} | "
+                            f"func={func.__name__} | stage=PUT_END | "
+                            f"duration={put_end - put_start:.6f}s | timestamp={put_end:.6f}"
+                        )
+                    
+                    # ========== 日志点8: 函数结束 ==========
+                    if TQ_TRACE_ENABLED:
+                        total_duration = put_end - start_time
+                        get_duration = get_end - get_start
+                        compute_duration = compute_end - compute_start
+                        put_duration = put_end - put_start
+                        
+                        get_ratio = (get_duration / total_duration * 100) if total_duration > 0 else 0
+                        compute_ratio = (compute_duration / total_duration * 100) if total_duration > 0 else 0
+                        put_ratio = (put_duration / total_duration * 100) if total_duration > 0 else 0
+                        
+                        logger.info(
+                            f"[TQ-TRACE] trace_id={trace_id} | "
+                            f"func={func.__name__} | stage=FUNCTION_END | "
+                            f"total_duration={total_duration:.6f}s | "
+                            f"get_ratio={get_ratio:.2f}% | "
+                            f"compute_ratio={compute_ratio:.2f}% | "
+                            f"put_ratio={put_ratio:.2f}% | "
+                            f"timestamp={put_end:.6f}"
+                        )
+                    
                     return updated_batchmeta
                 return _postprocess_common(output, put_data, need_collect)
 
