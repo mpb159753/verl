@@ -3,13 +3,13 @@
 # 验证 TransferQueue Profiler 标记功能的脚本 (NPU 版本)
 # 使用 gsm8k 数据 + qwen 0.5b 模型 + vllm rollout
 # 需要在 NPU 机器上运行
-#
-# 注意：使用实验性的 transfer_queue trainer 模块
 
 set -x
 
 PROJECT_DIR="$(pwd)"
 PROFILE_OUTPUT="./outputs/tq_profiler_validation_npu"
+
+export TRANSFER_QUEUE_ENABLE=1
 
 # 启用 TQ Profiler 标记
 export TQ_PROFILER_ENABLED=1
@@ -18,13 +18,11 @@ export TQ_TRACE_ENABLED=1
 # 禁用 torch.compile (dynamo) 避免 NPU 上的 Triton driver 检测问题
 export TORCHDYNAMO_DISABLE=1
 
-# 使用实验性的 transfer_queue.main_ppo 模块
-# 注意：它使用 verl/experimental/transfer_queue/config 目录下的配置
-# 该配置继承自 verl/trainer/config/ppo_trainer.yaml 并添加了 TQ 相关配置
 python3 -m verl.experimental.transfer_queue.main_ppo \
-    --config-path="$PROJECT_DIR/verl/trainer/config" \
-    --config-name='ppo_trainer' \
+    --config-name='transfer_queue_ppo_trainer' \
     algorithm.adv_estimator=grpo \
+    data.train_files=$PROJECT_DIR/data/gsm8k/train.parquet \
+    data.val_files=$PROJECT_DIR/data/gsm8k/test.parquet \
     data.dataloader_num_workers=0 \
     data.max_prompt_length=2048 \
     data.max_response_length=2048 \
@@ -42,6 +40,7 @@ python3 -m verl.experimental.transfer_queue.main_ppo \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
+    actor_rollout_ref.rollout.enforce_eager=true \
     actor_rollout_ref.rollout.n=4 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.actor.profiler.tool=npu \
@@ -62,15 +61,10 @@ python3 -m verl.experimental.transfer_queue.main_ppo \
     trainer.test_freq=-1 \
     trainer.total_training_steps=1 \
     trainer.device=npu \
-    data.train_files=$PROJECT_DIR/data/gsm8k/train.parquet \
-    data.val_files=$PROJECT_DIR/data/gsm8k/test.parquet \
     global_profiler.tool=npu \
     global_profiler.steps='[1,3,5,7,9]' \
     global_profiler.save_path="$PROFILE_OUTPUT" \
-    transfer_queue.enable=True \
-    transfer_queue.num_global_batch=1 \
-    transfer_queue.storage_backend=AsyncSimpleStorageManager \
-    transfer_queue.num_data_storage_units=1 \
+    transfer_queue.enable=true \
     "$@"
 
 echo "====================================="
