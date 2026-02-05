@@ -53,6 +53,21 @@ is_transferqueue_enabled = os.environ.get("TRANSFER_QUEUE_ENABLE", False)
 # TQ Performance Logging Configuration
 TQ_TRACE_ENABLED = os.getenv("TQ_TRACE_ENABLED", "0") == "1"
 TQ_TRACE_DETAIL_ENABLED = os.getenv("TQ_TRACE_DETAIL_ENABLED", "0") == "1"
+TQ_PROFILER_ENABLED = os.getenv("TQ_PROFILER_ENABLED", "0") == "1"
+
+# Lazy import profiler functions to avoid circular imports
+_mark_start_range = None
+_mark_end_range = None
+
+
+def _get_profiler_functions():
+    """Lazy load profiler functions when TQ_PROFILER_ENABLED is set."""
+    global _mark_start_range, _mark_end_range
+    if _mark_start_range is None:
+        from verl.utils.profiler import mark_start_range, mark_end_range
+        _mark_start_range = mark_start_range
+        _mark_end_range = mark_end_range
+    return _mark_start_range, _mark_end_range
 
 
 def create_transferqueue_client(
@@ -368,12 +383,33 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     f"Task {func.__name__} (pid={pid}) is getting len_samples={batchmeta.size}, "
                     f"global_idx={batchmeta.global_indexes}"
                 )
+                
+                # Profiler: TQ_GET phase
+                get_range_id = None
+                if TQ_PROFILER_ENABLED:
+                    mark_start_range, mark_end_range = _get_profiler_functions()
+                    get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}", color="blue")
+                
                 args = [_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {k: _batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v for k, v in kwargs.items()}
+                
+                if TQ_PROFILER_ENABLED and get_range_id is not None:
+                    mark_end_range(get_range_id)
+                
                 output = func(*args, **kwargs)
                 need_collect = _compute_need_collect(dispatch_mode, args)
                 if put_data and need_collect:
+                    # Profiler: TQ_PUT phase
+                    put_range_id = None
+                    if TQ_PROFILER_ENABLED:
+                        mark_start_range, mark_end_range = _get_profiler_functions()
+                        put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}", color="green")
+                    
                     updated_batch_meta = _update_batchmeta_with_output(output, batchmeta, func.__name__)
+                    
+                    if TQ_PROFILER_ENABLED and put_range_id is not None:
+                        mark_end_range(put_range_id)
+                    
                     return updated_batch_meta
                 return _postprocess_common(output, put_data, need_collect)
 
@@ -407,11 +443,20 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                         f"batch_size={batchmeta.size} | timestamp={get_start:.6f}"
                     )
                 
+                # Profiler: TQ_GET phase
+                get_range_id = None
+                if TQ_PROFILER_ENABLED:
+                    mark_start_range, mark_end_range = _get_profiler_functions()
+                    get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}", color="blue")
+                
                 args = [await _async_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {
                     k: await _async_batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v
                     for k, v in kwargs.items()
                 }
+                
+                if TQ_PROFILER_ENABLED and get_range_id is not None:
+                    mark_end_range(get_range_id)
                 
                 # ========== 日志点3: Get数据完成 ==========
                 if TQ_TRACE_ENABLED:
@@ -451,7 +496,16 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                             f"func={func.__name__} | stage=PUT_START | timestamp={put_start:.6f}"
                         )
                     
+                    # Profiler: TQ_PUT phase
+                    put_range_id = None
+                    if TQ_PROFILER_ENABLED:
+                        mark_start_range, mark_end_range = _get_profiler_functions()
+                        put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}", color="green")
+                    
                     updated_batchmeta = await _async_update_batchmeta_with_output(output, batchmeta, func.__name__)
+                    
+                    if TQ_PROFILER_ENABLED and put_range_id is not None:
+                        mark_end_range(put_range_id)
                     
                     # ========== 日志点7: Put数据完成 ==========
                     if TQ_TRACE_ENABLED:
