@@ -7,10 +7,13 @@
 set -x
 
 PROJECT_DIR="$(pwd)"
+PROFILE_OUTPUT="./outputs/tq_profiler_validation_npu"
 
 # 启用 TQ Profiler 标记
 export TQ_PROFILER_ENABLED=1
 export TQ_TRACE_ENABLED=1
+
+# 禁用 torch.compile (dynamo) 避免 NPU 上的 Triton driver 检测问题
 export TORCHDYNAMO_DISABLE=1
 
 python3 -m verl.trainer.main_ppo \
@@ -36,6 +39,13 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.n=4 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
+    actor_rollout_ref.actor.profiler.tool=npu \
+    actor_rollout_ref.actor.profiler.enable=True \
+    actor_rollout_ref.actor.profiler.save_path="$PROFILE_OUTPUT" \
+    actor_rollout_ref.actor.profiler.all_ranks=True \
+    '+actor_rollout_ref.actor.profiler.tool_config.npu.level=level0' \
+    '+actor_rollout_ref.actor.profiler.tool_config.npu.analysis=False' \
+    '+actor_rollout_ref.actor.profiler.tool_config.npu.contents=[]' \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
@@ -50,15 +60,15 @@ python3 -m verl.trainer.main_ppo \
     data.train_files=$PROJECT_DIR/data/gsm8k/train.parquet \
     data.val_files=$PROJECT_DIR/data/gsm8k/test.parquet \
     global_profiler.tool=npu \
-    global_profiler.steps='[0,2,4,6,8]' \
-    global_profiler.save_path=./outputs/tq_profiler_validation_npu \
+    global_profiler.steps='[1]' \
+    global_profiler.save_path="$PROFILE_OUTPUT" \
     transfer_queue.enable=True \
     "$@"
 
 echo "====================================="
 echo "验证完成！"
 echo "请使用 MindStudio Insight 查看 profiling 结果："
-echo "  ./outputs/tq_profiler_validation_npu/"
+echo "  $PROFILE_OUTPUT/"
 echo ""
 echo "搜索 TQ_GET 和 TQ_PUT 标记验证是否生效"
 echo "====================================="
