@@ -55,6 +55,79 @@ TQ_TRACE_ENABLED = os.getenv("TQ_TRACE_ENABLED", "0") == "1"
 TQ_TRACE_DETAIL_ENABLED = os.getenv("TQ_TRACE_DETAIL_ENABLED", "0") == "1"
 TQ_PROFILER_ENABLED = os.getenv("TQ_PROFILER_ENABLED", "0") == "1"
 
+
+class TQMetricsCollector:
+    """收集一个 step 内所有 TQ 操作的 timing 数据（单例模式）"""
+
+    _instance = None
+
+    def __init__(self):
+        self.reset()
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def reset(self):
+        """重置所有收集的数据"""
+        self.get_durations = []
+        self.put_durations = []
+        self.compute_durations = []
+        self.total_durations = []
+        self.data_sizes_mb = []
+
+    def record_get(self, duration: float):
+        self.get_durations.append(duration)
+
+    def record_put(self, duration: float):
+        self.put_durations.append(duration)
+
+    def record_compute(self, duration: float):
+        self.compute_durations.append(duration)
+
+    def record_total(self, duration: float):
+        self.total_durations.append(duration)
+
+    def record_data_size(self, size_mb: float):
+        self.data_sizes_mb.append(size_mb)
+
+    def get_metrics(self) -> dict:
+        """获取汇总的 metrics"""
+        metrics = {}
+        if self.get_durations:
+            metrics["tq/get_time_total"] = sum(self.get_durations)
+            metrics["tq/get_time_mean"] = sum(self.get_durations) / len(self.get_durations)
+            metrics["tq/get_count"] = len(self.get_durations)
+        if self.put_durations:
+            metrics["tq/put_time_total"] = sum(self.put_durations)
+            metrics["tq/put_time_mean"] = sum(self.put_durations) / len(self.put_durations)
+            metrics["tq/put_count"] = len(self.put_durations)
+        if self.compute_durations:
+            metrics["tq/compute_time_total"] = sum(self.compute_durations)
+            metrics["tq/compute_time_mean"] = sum(self.compute_durations) / len(self.compute_durations)
+        if self.total_durations:
+            metrics["tq/total_time"] = sum(self.total_durations)
+        if self.data_sizes_mb:
+            metrics["tq/data_size_mb_total"] = sum(self.data_sizes_mb)
+        return metrics
+
+
+def get_tq_metrics() -> dict:
+    """获取当前 step 的 TQ metrics"""
+    if not is_transferqueue_enabled:
+        return {}
+    return TQMetricsCollector.get_instance().get_metrics()
+
+
+def reset_tq_metrics():
+    """重置 TQ metrics 收集器（每个 step 开始时调用）"""
+    if not is_transferqueue_enabled:
+        return
+    TQMetricsCollector.get_instance().reset()
+
+
 # Lazy import profiler functions to avoid circular imports
 _mark_start_range = None
 _mark_end_range = None
@@ -419,9 +492,12 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
             if batchmeta is None:
                 return await func(*args, **kwargs)
             else:
+                # 始终记录计时数据用于 metrics 收集
+                start_time = time.perf_counter()
+                collector = TQMetricsCollector.get_instance()
+                
                 # ========== 日志点1: 函数开始 ==========
                 if TQ_TRACE_ENABLED:
-                    start_time = time.perf_counter()
                     trace_id = _get_trace_id(batchmeta)
                     logger.info(
                         f"[TQ-TRACE] trace_id={trace_id} | "
@@ -435,8 +511,8 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                 )
                 
                 # ========== 日志点2: Get数据开始 ==========
+                get_start = time.perf_counter()
                 if TQ_TRACE_ENABLED:
-                    get_start = time.perf_counter()
                     logger.info(
                         f"[TQ-TRACE] trace_id={trace_id} | "
                         f"func={func.__name__} | stage=GET_START | "
@@ -459,17 +535,20 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     mark_end_range(get_range_id)
                 
                 # ========== 日志点3: Get数据完成 ==========
+                get_end = time.perf_counter()
+                get_duration = get_end - get_start
+                collector.record_get(get_duration)
+                
                 if TQ_TRACE_ENABLED:
-                    get_end = time.perf_counter()
                     logger.info(
                         f"[TQ-TRACE] trace_id={trace_id} | "
                         f"func={func.__name__} | stage=GET_END | "
-                        f"duration={get_end - get_start:.6f}s | timestamp={get_end:.6f}"
+                        f"duration={get_duration:.6f}s | timestamp={get_end:.6f}"
                     )
                 
                 # ========== 日志点4: 业务逻辑开始 ==========
+                compute_start = time.perf_counter()
                 if TQ_TRACE_ENABLED:
-                    compute_start = time.perf_counter()
                     logger.info(
                         f"[TQ-TRACE] trace_id={trace_id} | "
                         f"func={func.__name__} | stage=COMPUTE_START | timestamp={compute_start:.6f}"
@@ -478,19 +557,22 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                 output = await func(*args, **kwargs)
                 
                 # ========== 日志点5: 业务逻辑完成 ==========
+                compute_end = time.perf_counter()
+                compute_duration = compute_end - compute_start
+                collector.record_compute(compute_duration)
+                
                 if TQ_TRACE_ENABLED:
-                    compute_end = time.perf_counter()
                     logger.info(
                         f"[TQ-TRACE] trace_id={trace_id} | "
                         f"func={func.__name__} | stage=COMPUTE_END | "
-                        f"duration={compute_end - compute_start:.6f}s | timestamp={compute_end:.6f}"
+                        f"duration={compute_duration:.6f}s | timestamp={compute_end:.6f}"
                     )
                 
                 need_collect = _compute_need_collect(dispatch_mode, args)
                 if put_data and need_collect:
                     # ========== 日志点6: Put数据开始 ==========
+                    put_start = time.perf_counter()
                     if TQ_TRACE_ENABLED:
-                        put_start = time.perf_counter()
                         logger.info(
                             f"[TQ-TRACE] trace_id={trace_id} | "
                             f"func={func.__name__} | stage=PUT_START | timestamp={put_start:.6f}"
@@ -508,21 +590,22 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                         mark_end_range(put_range_id)
                     
                     # ========== 日志点7: Put数据完成 ==========
+                    put_end = time.perf_counter()
+                    put_duration = put_end - put_start
+                    collector.record_put(put_duration)
+                    
                     if TQ_TRACE_ENABLED:
-                        put_end = time.perf_counter()
                         logger.info(
                             f"[TQ-TRACE] trace_id={trace_id} | "
                             f"func={func.__name__} | stage=PUT_END | "
-                            f"duration={put_end - put_start:.6f}s | timestamp={put_end:.6f}"
+                            f"duration={put_duration:.6f}s | timestamp={put_end:.6f}"
                         )
                     
                     # ========== 日志点8: 函数结束 ==========
+                    total_duration = put_end - start_time
+                    collector.record_total(total_duration)
+                    
                     if TQ_TRACE_ENABLED:
-                        total_duration = put_end - start_time
-                        get_duration = get_end - get_start
-                        compute_duration = compute_end - compute_start
-                        put_duration = put_end - put_start
-                        
                         get_ratio = (get_duration / total_duration * 100) if total_duration > 0 else 0
                         compute_ratio = (compute_duration / total_duration * 100) if total_duration > 0 else 0
                         put_ratio = (put_duration / total_duration * 100) if total_duration > 0 else 0

@@ -61,6 +61,7 @@ from verl.utils.metric import reduce_metrics
 from verl.utils.py_functional import rename_dict
 from verl.utils.rollout_skip import RolloutSkip
 from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_partitions, log_seqlen_unbalance
+from verl.utils.transferqueue_utils import get_tq_metrics, is_transferqueue_enabled, reset_tq_metrics
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 from verl.workers.config import FSDPEngineConfig
@@ -1408,6 +1409,10 @@ class RayPPOTrainer:
                 metrics = {}
                 timing_raw = {}
 
+                # Reset TQ metrics collector at the start of each step
+                if is_transferqueue_enabled:
+                    reset_tq_metrics()
+
                 with marked_timer("start_profile", timing_raw):
                     self._start_profiling(
                         not prev_step_profile and curr_step_profile
@@ -1703,6 +1708,9 @@ class RayPPOTrainer:
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
+                # collect TQ metrics if TransferQueue is enabled
+                if is_transferqueue_enabled:
+                    metrics.update(get_tq_metrics())
                 # compute variance proxy metrics
                 gradient_norm = metrics.get("actor/grad_norm", None)
                 metrics.update(compute_variance_proxy_metrics(batch=batch, gradient_norm=gradient_norm))

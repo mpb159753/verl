@@ -11,6 +11,7 @@ PROJECT_DIR="$(pwd)"
 # 启用 TQ Profiler 标记
 export TQ_PROFILER_ENABLED=1
 export TQ_TRACE_ENABLED=1
+export TORCHDYNAMO_DISABLE=1
 
 python3 -m verl.trainer.main_ppo \
     --config-path="$PROJECT_DIR/verl/trainer/config" \
@@ -44,12 +45,12 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.save_freq=-1 \
     trainer.test_freq=-1 \
-    trainer.total_epochs=1 \
+    trainer.total_training_steps=1 \
     trainer.device=npu \
     data.train_files=$PROJECT_DIR/data/gsm8k/train.parquet \
     data.val_files=$PROJECT_DIR/data/gsm8k/test.parquet \
     global_profiler.tool=npu \
-    global_profiler.steps='[0]' \
+    global_profiler.steps='[0,2,4,6,8]' \
     global_profiler.save_path=./outputs/tq_profiler_validation_npu \
     transfer_queue.enable=True \
     "$@"
