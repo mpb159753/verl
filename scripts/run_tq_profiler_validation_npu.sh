@@ -17,8 +17,8 @@ python3 -m verl.trainer.main_ppo \
     --config-name='ppo_trainer' \
     algorithm.adv_estimator=grpo \
     data.dataloader_num_workers=0 \
-    data.max_prompt_length=1024 \
-    data.max_response_length=512 \
+    data.max_prompt_length=2048 \
+    data.max_response_length=2048 \
     data.train_batch_size=32 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
