@@ -3,6 +3,8 @@
 # 验证 TransferQueue Profiler 标记功能的脚本 (NPU 版本)
 # 使用 gsm8k 数据 + qwen 0.5b 模型 + vllm rollout
 # 需要在 NPU 机器上运行
+#
+# 注意：使用实验性的 transfer_queue trainer 模块
 
 set -x
 
@@ -16,7 +18,10 @@ export TQ_TRACE_ENABLED=1
 # 禁用 torch.compile (dynamo) 避免 NPU 上的 Triton driver 检测问题
 export TORCHDYNAMO_DISABLE=1
 
-python3 -m verl.trainer.main_ppo \
+# 使用实验性的 transfer_queue.main_ppo 模块
+# 注意：它使用 verl/experimental/transfer_queue/config 目录下的配置
+# 该配置继承自 verl/trainer/config/ppo_trainer.yaml 并添加了 TQ 相关配置
+python3 -m verl.experimental.transfer_queue.main_ppo \
     --config-path="$PROJECT_DIR/verl/trainer/config" \
     --config-name='ppo_trainer' \
     algorithm.adv_estimator=grpo \
@@ -63,6 +68,9 @@ python3 -m verl.trainer.main_ppo \
     global_profiler.steps='[1,3,5,7,9]' \
     global_profiler.save_path="$PROFILE_OUTPUT" \
     transfer_queue.enable=True \
+    transfer_queue.num_global_batch=1 \
+    transfer_queue.storage_backend=AsyncSimpleStorageManager \
+    transfer_queue.num_data_storage_units=1 \
     "$@"
 
 echo "====================================="
