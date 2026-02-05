@@ -43,9 +43,9 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.profiler.enable=True \
     actor_rollout_ref.actor.profiler.save_path="$PROFILE_OUTPUT" \
     actor_rollout_ref.actor.profiler.all_ranks=True \
-    '+actor_rollout_ref.actor.profiler.tool_config.npu.level=level0' \
-    '+actor_rollout_ref.actor.profiler.tool_config.npu.analysis=False' \
-    '+actor_rollout_ref.actor.profiler.tool_config.npu.contents=[]' \
+    '++actor_rollout_ref.actor.profiler.tool_config.npu.level=level0' \
+    '++actor_rollout_ref.actor.profiler.tool_config.npu.analysis=False' \
+    '++actor_rollout_ref.actor.profiler.tool_config.npu.contents=[]' \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
@@ -60,7 +60,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_files=$PROJECT_DIR/data/gsm8k/train.parquet \
     data.val_files=$PROJECT_DIR/data/gsm8k/test.parquet \
     global_profiler.tool=npu \
-    global_profiler.steps='[1]' \
+    global_profiler.steps='[1,3,5,7,9]' \
     global_profiler.save_path="$PROFILE_OUTPUT" \
     transfer_queue.enable=True \
     "$@"
