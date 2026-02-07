@@ -461,7 +461,7 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                 get_range_id = None
                 if TQ_PROFILER_ENABLED:
                     mark_start_range, mark_end_range = _get_profiler_functions()
-                    get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}", color="blue")
+                    get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}")
                 
                 args = [_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {k: _batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v for k, v in kwargs.items()}
@@ -476,7 +476,7 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     put_range_id = None
                     if TQ_PROFILER_ENABLED:
                         mark_start_range, mark_end_range = _get_profiler_functions()
-                        put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}", color="green")
+                        put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}")
                     
                     updated_batch_meta = _update_batchmeta_with_output(output, batchmeta, func.__name__)
                     
@@ -523,7 +523,7 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                 get_range_id = None
                 if TQ_PROFILER_ENABLED:
                     mark_start_range, mark_end_range = _get_profiler_functions()
-                    get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}", color="blue")
+                    get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}")
                 
                 args = [await _async_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {
@@ -582,7 +582,7 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     put_range_id = None
                     if TQ_PROFILER_ENABLED:
                         mark_start_range, mark_end_range = _get_profiler_functions()
-                        put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}", color="green")
+                        put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}")
                     
                     updated_batchmeta = await _async_update_batchmeta_with_output(output, batchmeta, func.__name__)
                     

@@ -69,7 +69,27 @@ from verl.utils.rollout_skip import RolloutSkip
 from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
-from verl.utils.transferqueue_utils import create_transferqueue_client, get_transferqueue_client, tqbridge
+from verl.utils.transferqueue_utils import (
+    create_transferqueue_client,
+    get_transferqueue_client,
+    tqbridge,
+    TQ_PROFILER_ENABLED,
+)
+
+
+# Lazy import profiler functions to avoid circular imports
+_mark_start_range = None
+_mark_end_range = None
+
+
+def _get_profiler_functions():
+    """Lazy load profiler functions when TQ_PROFILER_ENABLED is set."""
+    global _mark_start_range, _mark_end_range
+    if _mark_start_range is None:
+        from verl.utils.profiler import mark_start_range, mark_end_range
+        _mark_start_range = mark_start_range
+        _mark_end_range = mark_end_range
+    return _mark_start_range, _mark_end_range
 
 
 @dataclass
@@ -193,7 +213,16 @@ def compute_response_mask(batch_meta: BatchMeta, tq_client):
     Returns:
         BatchMeta: The BatchMeta of attention mask for the response tokens.
     """
+    # Profiler: TQ_GET phase
+    get_range_id = None
+    if TQ_PROFILER_ENABLED:
+        mark_start_range, mark_end_range = _get_profiler_functions()
+        get_range_id = mark_start_range(message="TQ_GET:compute_response_mask")
+    
     data = tq_client.get_data(batch_meta)
+    
+    if TQ_PROFILER_ENABLED and get_range_id is not None:
+        mark_end_range(get_range_id)
 
     responses = data["responses"]
     response_length = responses.size(1)
@@ -201,7 +230,16 @@ def compute_response_mask(batch_meta: BatchMeta, tq_client):
     response_mask = attention_mask[:, -response_length:]
     output = TensorDict({"response_mask": response_mask}, batch_size=response_mask.size(0))
 
+    # Profiler: TQ_PUT phase
+    put_range_id = None
+    if TQ_PROFILER_ENABLED:
+        mark_start_range, mark_end_range = _get_profiler_functions()
+        put_range_id = mark_start_range(message="TQ_PUT:compute_response_mask")
+    
     batch_meta = tq_client.put(data=output, metadata=batch_meta)
+    
+    if TQ_PROFILER_ENABLED and put_range_id is not None:
+        mark_end_range(put_range_id)
 
     return batch_meta
 
@@ -575,7 +613,16 @@ class RayPPOTrainer:
             rollout_data_dir (str): Directory path to save the rollout data
         """
         with marked_timer("dump_rollout_generations", timing_raw, color="green"):
+            # Profiler: TQ_GET phase
+            get_range_id = None
+            if TQ_PROFILER_ENABLED:
+                mark_start_range, mark_end_range = _get_profiler_functions()
+                get_range_id = mark_start_range(message="TQ_GET:_log_rollout_data")
+            
             data = self.tq_client.get_data(log_rollout_meta)
+            
+            if TQ_PROFILER_ENABLED and get_range_id is not None:
+                mark_end_range(get_range_id)
 
             inputs = self.tokenizer.batch_decode(data["prompts"], skip_special_tokens=True)
             outputs = self.tokenizer.batch_decode(data["responses"], skip_special_tokens=True)
@@ -668,7 +715,16 @@ class RayPPOTrainer:
             if self.config.reward_model.enable and test_batch[0]["reward_model"]["style"] == "model":
                 return {}
 
+            # Profiler: TQ_PUT phase
+            put_range_id = None
+            if TQ_PROFILER_ENABLED:
+                mark_start_range, mark_end_range = _get_profiler_functions()
+                put_range_id = mark_start_range(message="TQ_PUT:_validate:test_batch")
+            
             batch_meta = self.tq_client.put(data=test_batch, partition_id=f"val_{self.global_steps - 1}")
+            
+            if TQ_PROFILER_ENABLED and put_range_id is not None:
+                mark_end_range(put_range_id)
 
             batch_meta.update_extra_info(
                 {
@@ -694,7 +750,16 @@ class RayPPOTrainer:
 
             # Store generated outputs
             test_response_meta = batch_meta.select_fields(["prompts", "responses", "uid", "reward_model"])
+            # Profiler: TQ_GET phase
+            get_range_id = None
+            if TQ_PROFILER_ENABLED:
+                mark_start_range, mark_end_range = _get_profiler_functions()
+                get_range_id = mark_start_range(message="TQ_GET:_validate:test_response")
+            
             data = self.tq_client.get_data(test_response_meta)
+            
+            if TQ_PROFILER_ENABLED and get_range_id is not None:
+                mark_end_range(get_range_id)
             output_ids = data["responses"]
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
             sample_outputs.extend(output_texts)
@@ -737,18 +802,45 @@ class RayPPOTrainer:
 
             # collect num_turns of each prompt
             if "__num_turns__" in batch_meta.field_names:
+                # Profiler: TQ_GET phase
+                get_range_id = None
+                if TQ_PROFILER_ENABLED:
+                    mark_start_range, mark_end_range = _get_profiler_functions()
+                    get_range_id = mark_start_range(message="TQ_GET:_validate:num_turns")
+                
                 data = self.tq_client.get_data(batch_meta.select_fields(["__num_turns__"]))
+                
+                if TQ_PROFILER_ENABLED and get_range_id is not None:
+                    mark_end_range(get_range_id)
                 sample_turns.append(data["__num_turns__"])
 
             data_source = ["unknown"] * reward_tensor.shape[0]
             if "data_source" in batch_meta.field_names:
                 data_source_meta = batch_meta.select_fields(["data_source"])
+                # Profiler: TQ_GET phase
+                get_range_id = None
+                if TQ_PROFILER_ENABLED:
+                    mark_start_range, mark_end_range = _get_profiler_functions()
+                    get_range_id = mark_start_range(message="TQ_GET:_validate:data_source")
+                
                 data = self.tq_client.get_data(data_source_meta)
+                
+                if TQ_PROFILER_ENABLED and get_range_id is not None:
+                    mark_end_range(get_range_id)
                 data_source = data["data_source"]
 
             data_source_lst.append(data_source)
 
+            # Profiler: TQ_CLEAR phase
+            clear_range_id = None
+            if TQ_PROFILER_ENABLED:
+                mark_start_range, mark_end_range = _get_profiler_functions()
+                clear_range_id = mark_start_range(message="TQ_CLEAR:_validate")
+            
             self.tq_client.clear_samples(batch_meta)
+            
+            if TQ_PROFILER_ENABLED and clear_range_id is not None:
+                mark_end_range(clear_range_id)
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
@@ -1056,7 +1148,16 @@ class RayPPOTrainer:
         self, batch: BatchMeta, tq_client, metrics, logging_prefix="global_seqlen", keep_minibatch=False
     ):
         """Reorder the batchmeta on single controller such that each dp rank gets similar total tokens"""
+        # Profiler: TQ_GET phase
+        get_range_id = None
+        if TQ_PROFILER_ENABLED:
+            mark_start_range, mark_end_range = _get_profiler_functions()
+            get_range_id = mark_start_range(message="TQ_GET:_balance_batch")
+        
         data = tq_client.get_data(batch)
+        
+        if TQ_PROFILER_ENABLED and get_range_id is not None:
+            mark_end_range(get_range_id)
 
         attention_mask = data["attention_mask"]
         batch_size = attention_mask.shape[0]
@@ -1244,7 +1345,16 @@ class RayPPOTrainer:
                     batch_dict, repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True
                 )
                 batch: TensorDict = self.dict_to_tensordict(repeated_batch_dict)
+                # Profiler: TQ_PUT phase
+                put_range_id = None
+                if TQ_PROFILER_ENABLED:
+                    mark_start_range, mark_end_range = _get_profiler_functions()
+                    put_range_id = mark_start_range(message="TQ_PUT:fit:gen_batch")
+                
                 gen_meta = self.tq_client.put(data=batch, partition_id=f"train_{self.global_steps - 1}")
+                
+                if TQ_PROFILER_ENABLED and put_range_id is not None:
+                    mark_end_range(put_range_id)
 
                 # pass global_steps to trace
                 gen_meta.set_extra_info("global_steps", self.global_steps)
@@ -1286,11 +1396,20 @@ class RayPPOTrainer:
                     batch_meta: BatchMeta = gen_meta.union(gen_output_meta)
 
                     if "response_mask" not in batch_meta.field_names:
+                        # Profiler: TQ_GET_META phase
+                        get_meta_range_id = None
+                        if TQ_PROFILER_ENABLED:
+                            mark_start_range, mark_end_range = _get_profiler_functions()
+                            get_meta_range_id = mark_start_range(message="TQ_GET_META:fit:response_mask")
+                        
                         response_mask_meta = self.tq_client.get_meta(
                             data_fields=["responses", "attention_mask"],
                             task_name="compute_response_mask",
                             **base_get_meta_kwargs,
                         )
+                        
+                        if TQ_PROFILER_ENABLED and get_meta_range_id is not None:
+                            mark_end_range(get_meta_range_id)
                         response_mask_output_meta = compute_response_mask(response_mask_meta, self.tq_client)
                         batch_meta = batch_meta.union(response_mask_output_meta)
 
@@ -1307,7 +1426,16 @@ class RayPPOTrainer:
                         batch_meta.reorder(balanced_idx)
 
                     # compute global_valid tokens
+                    # Profiler: TQ_GET phase
+                    get_range_id = None
+                    if TQ_PROFILER_ENABLED:
+                        mark_start_range, mark_end_range = _get_profiler_functions()
+                        get_range_id = mark_start_range(message="TQ_GET:fit:attention_mask")
+                    
                     data = self.tq_client.get_data(attention_mask_meta)
+                    
+                    if TQ_PROFILER_ENABLED and get_range_id is not None:
+                        mark_end_range(get_range_id)
                     batch_meta.extra_info["global_token_num"] = torch.sum(data["attention_mask"], dim=-1).tolist()
 
                     with marked_timer("reward", timing_raw, color="yellow"):
@@ -1363,7 +1491,16 @@ class RayPPOTrainer:
                         old_log_prob_output_meta = self.actor_rollout_wg.compute_log_prob(old_log_prob_meta)
                         batch_meta = batch_meta.union(old_log_prob_output_meta)
 
+                        # Profiler: TQ_GET phase
+                        get_range_id = None
+                        if TQ_PROFILER_ENABLED:
+                            mark_start_range, mark_end_range = _get_profiler_functions()
+                            get_range_id = mark_start_range(message="TQ_GET:fit:old_log_prob")
+                        
                         data = self.tq_client.get_data(old_log_prob_output_meta)
+                        
+                        if TQ_PROFILER_ENABLED and get_range_id is not None:
+                            mark_end_range(get_range_id)
                         entropys = data["entropys"]
                         response_masks = data["response_mask"]
                         actor_config = self.config.actor_rollout_ref.actor
@@ -1428,12 +1565,30 @@ class RayPPOTrainer:
                         if self.config.reward_model.launch_reward_fn_async:
                             reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
                         reward_td = TensorDict({"token_level_scores": reward_tensor}, batch_size=reward_tensor.size(0))
+                        # Profiler: TQ_PUT phase
+                        put_range_id = None
+                        if TQ_PROFILER_ENABLED:
+                            mark_start_range, mark_end_range = _get_profiler_functions()
+                            put_range_id = mark_start_range(message="TQ_PUT:fit:reward_td")
+                        
                         batch_meta = self.tq_client.put(data=reward_td, metadata=batch_meta)
+                        
+                        if TQ_PROFILER_ENABLED and put_range_id is not None:
+                            mark_end_range(put_range_id)
 
                         if reward_extra_infos_dict:
                             reward_extra_infos_dict_new = {k: np.array(v) for k, v in reward_extra_infos_dict.items()}
                             reward_extra_infos_td = self.dict_to_tensordict(reward_extra_infos_dict_new)
+                            # Profiler: TQ_PUT phase
+                            put_range_id = None
+                            if TQ_PROFILER_ENABLED:
+                                mark_start_range, mark_end_range = _get_profiler_functions()
+                                put_range_id = mark_start_range(message="TQ_PUT:fit:reward_extra_infos")
+                            
                             batch_meta = self.tq_client.put(data=reward_extra_infos_td, metadata=batch_meta)
+                            
+                            if TQ_PROFILER_ENABLED and put_range_id is not None:
+                                mark_end_range(put_range_id)
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
@@ -1454,23 +1609,50 @@ class RayPPOTrainer:
                             token_level_rewards_td = TensorDict(
                                 {"token_level_rewards": token_level_rewards}, batch_size=token_level_rewards.size(0)
                             )
+                            # Profiler: TQ_PUT phase
+                            put_range_id = None
+                            if TQ_PROFILER_ENABLED:
+                                mark_start_range, mark_end_range = _get_profiler_functions()
+                                put_range_id = mark_start_range(message="TQ_PUT:fit:apply_kl_penalty")
+                            
                             apply_kl_penalty_meta = self.tq_client.put(
                                 data=token_level_rewards_td, metadata=apply_kl_penalty_meta
                             )
+                            
+                            if TQ_PROFILER_ENABLED and put_range_id is not None:
+                                mark_end_range(put_range_id)
 
                             metrics.update(kl_metrics)
                             batch_meta = batch_meta.union(apply_kl_penalty_meta)
                         else:
                             token_level_scores_meta = batch_meta.select_fields(["token_level_scores"])
 
+                            # Profiler: TQ_GET phase
+                            get_range_id = None
+                            if TQ_PROFILER_ENABLED:
+                                mark_start_range, mark_end_range = _get_profiler_functions()
+                                get_range_id = mark_start_range(message="TQ_GET:fit:token_level_scores")
+                            
                             data = self.tq_client.get_data(token_level_scores_meta)
+                            
+                            if TQ_PROFILER_ENABLED and get_range_id is not None:
+                                mark_end_range(get_range_id)
                             token_level_rewards_td = TensorDict(
                                 {"token_level_rewards": data["token_level_scores"]},
                                 batch_size=data["token_level_scores"].size(0),
                             )
+                            # Profiler: TQ_PUT phase
+                            put_range_id = None
+                            if TQ_PROFILER_ENABLED:
+                                mark_start_range, mark_end_range = _get_profiler_functions()
+                                put_range_id = mark_start_range(message="TQ_PUT:fit:token_level_rewards")
+                            
                             token_level_scores_meta = self.tq_client.put(
                                 data=token_level_rewards_td, metadata=token_level_scores_meta
                             )
+                            
+                            if TQ_PROFILER_ENABLED and put_range_id is not None:
+                                mark_end_range(put_range_id)
                             batch_meta = batch_meta.union(token_level_scores_meta)
 
                         # compute advantages, executed on the driver process
@@ -1511,7 +1693,16 @@ class RayPPOTrainer:
                         advantages_td = TensorDict(
                             {"advantages": advantages, "returns": returns}, batch_size=advantages.size(0)
                         )
+                        # Profiler: TQ_PUT phase
+                        put_range_id = None
+                        if TQ_PROFILER_ENABLED:
+                            mark_start_range, mark_end_range = _get_profiler_functions()
+                            put_range_id = mark_start_range(message="TQ_PUT:fit:advantages")
+                        
                         compute_advantage_meta = self.tq_client.put(data=advantages_td, metadata=compute_advantage_meta)
+                        
+                        if TQ_PROFILER_ENABLED and put_range_id is not None:
+                            mark_end_range(put_range_id)
                         batch_meta = batch_meta.union(compute_advantage_meta)
 
                     # update critic
@@ -1673,7 +1864,16 @@ class RayPPOTrainer:
                     # TODO (TQ) :support transfer queue
                     self.train_dataloader.sampler.update(batch=batch)
 
+                # Profiler: TQ_CLEAR phase
+                clear_range_id = None
+                if TQ_PROFILER_ENABLED:
+                    mark_start_range, mark_end_range = _get_profiler_functions()
+                    clear_range_id = mark_start_range(message="TQ_CLEAR:fit")
+                
                 self.tq_client.clear_samples(batch_meta)
+                
+                if TQ_PROFILER_ENABLED and clear_range_id is not None:
+                    mark_end_range(clear_range_id)
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
 

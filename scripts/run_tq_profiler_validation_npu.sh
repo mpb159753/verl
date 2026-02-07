@@ -55,11 +55,11 @@ python3 -m verl.experimental.transfer_queue.main_ppo \
     trainer.logger='["console"]' \
     trainer.project_name='tq_profiler_validation' \
     trainer.experiment_name='qwen0.5b-gsm8k-tq-profiler-npu' \
-    trainer.n_gpus_per_node=1 \
+    trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=-1 \
     trainer.test_freq=-1 \
-    trainer.total_training_steps=1 \
+    trainer.total_training_steps=10 \
     trainer.device=npu \
     global_profiler.tool=npu \
     global_profiler.steps='[1,3,5,7,9]' \

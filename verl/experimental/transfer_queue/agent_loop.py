@@ -18,6 +18,22 @@ import ray
 from transfer_queue import BatchMeta
 
 import verl.experimental.agent_loop.agent_loop as agent_loop
+from verl.utils.transferqueue_utils import TQ_PROFILER_ENABLED
+
+
+# Lazy import profiler functions to avoid circular imports
+_mark_start_range = None
+_mark_end_range = None
+
+
+def _get_profiler_functions():
+    """Lazy load profiler functions when TQ_PROFILER_ENABLED is set."""
+    global _mark_start_range, _mark_end_range
+    if _mark_start_range is None:
+        from verl.utils.profiler import mark_start_range, mark_end_range
+        _mark_start_range = mark_start_range
+        _mark_end_range = mark_end_range
+    return _mark_start_range, _mark_end_range
 
 
 class AgentLoopManager(agent_loop.AgentLoopManager):
@@ -71,7 +87,16 @@ class AgentLoopManager(agent_loop.AgentLoopManager):
         tq_client = self._create_transferqueue_client()
         # batch sequence generation is bounded by the slowest sample
         slowest = np.argmax(t_generate_sequences + t_tool_calls)
+        # Profiler: TQ_GET phase
+        get_range_id = None
+        if TQ_PROFILER_ENABLED:
+            mark_start_range, mark_end_range = _get_profiler_functions()
+            get_range_id = mark_start_range(message="TQ_GET:_performance_metrics")
+        
         attention_mask = asyncio.run(tq_client.async_get_data(output[slowest]))["attention_mask"]
+        
+        if TQ_PROFILER_ENABLED and get_range_id is not None:
+            mark_end_range(get_range_id)
         prompt_length = output.samples[0].fields["prompts"].shape[0]
         timing["agent_loop/slowest/generate_sequences"] = t_generate_sequences[slowest]
         timing["agent_loop/slowest/tool_calls"] = t_tool_calls[slowest]
