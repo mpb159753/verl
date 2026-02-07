@@ -53,6 +53,13 @@ run_profile_test() {
     local MAX_SEQ_LENGTH=$6
     local TP_SIZE=$7
     local MICRO_BATCH=$8
+    local WITH_STACK_FLAG=$9
+    
+    # 根据 WITH_STACK_FLAG 设置 contents 参数
+    local PROFILE_CONTENTS='[]'
+    if [ "${WITH_STACK_FLAG}" = "true" ]; then
+        PROFILE_CONTENTS='["stack", "module", "npu", "cpu"]'
+    fi
 
     local PROFILE_OUTPUT="${PROFILE_BASE_OUTPUT}/${TEST_ID}"
     
@@ -67,6 +74,7 @@ run_profile_test() {
     echo "Max Seq Length: ${MAX_SEQ_LENGTH}"
     echo "TP Size: ${TP_SIZE}"
     echo "Micro Batch: ${MICRO_BATCH}"
+    echo "With Stack: ${WITH_STACK_FLAG}"
     echo "Profile 输出: ${PROFILE_OUTPUT}"
     echo "======================================"
     
@@ -103,7 +111,7 @@ run_profile_test() {
         actor_rollout_ref.actor.profiler.all_ranks=True \
         '++actor_rollout_ref.actor.profiler.tool_config.npu.level=level0' \
         '++actor_rollout_ref.actor.profiler.tool_config.npu.analysis=False' \
-        '++actor_rollout_ref.actor.profiler.tool_config.npu.contents=[]' \
+        "++actor_rollout_ref.actor.profiler.tool_config.npu.contents=${PROFILE_CONTENTS}" \
         algorithm.use_kl_in_reward=False \
         trainer.critic_warmup=0 \
         trainer.logger='["console"]' \
@@ -174,6 +182,7 @@ analyse(profiler_path='${STEP_15_DIR}', max_process_number=8)
 RUN_ANALYSIS=false
 SKIP_PROFILE=false
 TEST_FILTER=""
+WITH_STACK=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -189,9 +198,13 @@ while [[ $# -gt 0 ]]; do
             TEST_FILTER="$2"
             shift 2
             ;;
+        --with-stack)
+            WITH_STACK=true
+            shift
+            ;;
         *)
             echo "未知参数: $1"
-            echo "用法: $0 [--analyse] [--skip-profile] [--test T-XX]"
+            echo "用法: $0 [--analyse] [--skip-profile] [--test T-XX] [--with-stack]"
             exit 1
             ;;
     esac
@@ -217,7 +230,7 @@ if [ "${SKIP_PROFILE}" = false ]; then
             continue
         fi
         
-        run_profile_test "${TEST_ID}" "${MODEL}" "${TRAIN}" "${VAL}" "${BATCH}" "${SEQ}" "${TP}" "${MICRO}"
+        run_profile_test "${TEST_ID}" "${MODEL}" "${TRAIN}" "${VAL}" "${BATCH}" "${SEQ}" "${TP}" "${MICRO}" "${WITH_STACK}"
     done
 fi
 
@@ -253,4 +266,5 @@ echo "  运行所有测试:         ./run_multi_config_profiler_npu.sh"
 echo "  运行单个测试:         ./run_multi_config_profiler_npu.sh --test T-01"
 echo "  仅运行离线分析:       ./run_multi_config_profiler_npu.sh --skip-profile --analyse"
 echo "  运行测试后进行分析:   ./run_multi_config_profiler_npu.sh --analyse"
+echo "  启用调用栈记录:       ./run_multi_config_profiler_npu.sh --with-stack"
 echo "=============================================="
