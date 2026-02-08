@@ -42,6 +42,49 @@ export TQ_TRACE_ENABLED=1
 export TORCHDYNAMO_DISABLE=1
 
 # =====================================================
+# 资源清理函数
+# =====================================================
+cleanup_resources() {
+    echo "======================================"
+    echo "清理残留资源..."
+    echo "======================================"
+    
+    # 停止 Ray (忽略错误)
+    echo "停止 Ray..."
+    ray stop --force 2>/dev/null || true
+    
+    # 终止可能残留的训练进程
+    echo "终止残留 Python 进程..."
+    pkill -9 -f "verl.experimental.transfer_queue" 2>/dev/null || true
+    pkill -9 -f "python.*main_ppo" 2>/dev/null || true
+    pkill -9 -f "WorkerDict" 2>/dev/null || true
+    pkill -9 -f "TaskRunner" 2>/dev/null || true
+    
+    # 等待端口释放
+    echo "等待端口释放..."
+    sleep 5
+    
+    # 清理共享内存 (可选)
+    echo "清理共享内存..."
+    rm -rf /dev/shm/ray_* 2>/dev/null || true
+    rm -rf /dev/shm/plasma_* 2>/dev/null || true
+    
+    echo "资源清理完成"
+}
+
+# 设置退出时的清理钩子
+cleanup_on_exit() {
+    echo ""
+    echo "======================================"
+    echo "脚本退出，执行清理..."
+    echo "======================================"
+    # 停止 Ray
+    ray stop --force 2>/dev/null || true
+    echo "清理完成"
+}
+trap cleanup_on_exit EXIT
+
+# =====================================================
 # 运行单个测试配置的函数
 # =====================================================
 run_profile_test() {
@@ -229,6 +272,9 @@ if [ "${SKIP_PROFILE}" = false ]; then
         if [ -n "${TEST_FILTER}" ] && [ "${TEST_ID}" != "${TEST_FILTER}" ]; then
             continue
         fi
+        
+        # 每次测试前清理资源
+        cleanup_resources
         
         run_profile_test "${TEST_ID}" "${MODEL}" "${TRAIN}" "${VAL}" "${BATCH}" "${SEQ}" "${TP}" "${MICRO}" "${WITH_STACK}"
     done
