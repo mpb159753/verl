@@ -1,7 +1,7 @@
 #!/bin/bash
-# run_multi_config_profiler_npu.sh
-# 多配置 TransferQueue Profiler 脚本 (NPU 版本)
-# 运行 5 种不同配置的 profile 日志采集
+# run_multi_config_main_ppo_npu.sh
+# 多配置 Main PPO Profiler 脚本 (NPU 版本)
+# 运行 5 种不同配置的 profile 日志采集 (不使用 TransferQueue)
 # 需要在 NPU 机器上使用单机 8 卡运行
 
 set -x
@@ -29,16 +29,13 @@ DATASET_SHAREGPT4V_TEST="/home/m00594701/dataset/sharegpt4v/test.parquet"
 # =====================================================
 # Profile 配置
 # =====================================================
-PROFILE_BASE_OUTPUT="./outputs/multi_config_profiler_npu"
+PROFILE_BASE_OUTPUT="./outputs/multi_config_main_ppo_npu"
 TOTAL_STEPS=6
 PROFILE_STEPS='[2,4]'
 
 # =====================================================
 # 环境变量配置
 # =====================================================
-export TRANSFER_QUEUE_ENABLE=1
-export TQ_PROFILER_ENABLED=1
-export TQ_TRACE_ENABLED=1
 export TORCHDYNAMO_DISABLE=1
 
 # =====================================================
@@ -55,7 +52,7 @@ cleanup_resources() {
     
     # 终止可能残留的训练进程
     echo "终止残留 Python 进程..."
-    pkill -9 -f "verl.experimental.transfer_queue" 2>/dev/null || true
+    pkill -9 -f "verl.trainer.main_ppo" 2>/dev/null || true
     pkill -9 -f "python.*main_ppo" 2>/dev/null || true
     pkill -9 -f "WorkerDict" 2>/dev/null || true
     pkill -9 -f "TaskRunner" 2>/dev/null || true
@@ -123,8 +120,7 @@ run_profile_test() {
     
     mkdir -p "${PROFILE_OUTPUT}"
     
-    python3 -m verl.experimental.transfer_queue.main_ppo \
-        --config-name='transfer_queue_ppo_trainer' \
+    python3 -m verl.trainer.main_ppo \
         algorithm.adv_estimator=grpo \
         data.train_files="${TRAIN_DATA}" \
         data.val_files="${VAL_DATA}" \
@@ -159,7 +155,7 @@ run_profile_test() {
         algorithm.use_kl_in_reward=False \
         trainer.critic_warmup=0 \
         trainer.logger='["console"]' \
-        trainer.project_name='multi_config_profiler' \
+        trainer.project_name='multi_config_profiler_main' \
         trainer.experiment_name="${TEST_ID}" \
         trainer.n_gpus_per_node=8 \
         trainer.nnodes=1 \
@@ -170,7 +166,7 @@ run_profile_test() {
         global_profiler.tool=npu \
         global_profiler.steps="${PROFILE_STEPS}" \
         global_profiler.save_path="${PROFILE_OUTPUT}" \
-        transfer_queue.enable=true
+        transfer_queue.enable=false
 
     echo "======================================"
     echo "测试 ${TEST_ID} 完成！"
@@ -309,9 +305,9 @@ echo "  T-04: Qwen2.5-14B-Instruct + UltraChat_200k (Batch=1024, Seq=4096, TP=8,
 echo "  T-05: Qwen2.5-7B-Instruct + ShareGPT4V (Batch=64, Seq=32768, TP=1, Micro=1)"
 echo ""
 echo "用法示例:"
-echo "  运行所有测试:         ./run_multi_config_profiler_npu.sh"
-echo "  运行单个测试:         ./run_multi_config_profiler_npu.sh --test T-01"
-echo "  仅运行离线分析:       ./run_multi_config_profiler_npu.sh --skip-profile --analyse"
-echo "  运行测试后进行分析:   ./run_multi_config_profiler_npu.sh --analyse"
-echo "  启用调用栈记录:       ./run_multi_config_profiler_npu.sh --with-stack"
+echo "  运行所有测试:         ./run_multi_config_main_ppo_npu.sh"
+echo "  运行单个测试:         ./run_multi_config_main_ppo_npu.sh --test T-01"
+echo "  仅运行离线分析:       ./run_multi_config_main_ppo_npu.sh --skip-profile --analyse"
+echo "  运行测试后进行分析:   ./run_multi_config_main_ppo_npu.sh --analyse"
+echo "  启用调用栈记录:       ./run_multi_config_main_ppo_npu.sh --with-stack"
 echo "=============================================="
