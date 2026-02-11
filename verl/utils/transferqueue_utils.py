@@ -54,6 +54,10 @@ is_transferqueue_enabled = os.environ.get("TRANSFER_QUEUE_ENABLE", False)
 TQ_TRACE_ENABLED = os.getenv("TQ_TRACE_ENABLED", "0") == "1"
 TQ_TRACE_DETAIL_ENABLED = os.getenv("TQ_TRACE_DETAIL_ENABLED", "0") == "1"
 TQ_PROFILER_ENABLED = os.getenv("TQ_PROFILER_ENABLED", "0") == "1"
+TQ_LOG_ENABLED = os.getenv("TQ_LOG_ENABLED", "0") == "1"
+
+tq_logger = logging.getLogger("tq_ops")
+tq_logger.setLevel(logging.DEBUG)
 
 
 class TQMetricsCollector:
@@ -463,11 +467,19 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     mark_start_range, mark_end_range = _get_profiler_functions()
                     get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}")
                 
+                if TQ_LOG_ENABLED:
+                    _tq_get_start = time.perf_counter()
+                    tq_logger.info(f"[TQ-LOG] op=TQ_GET | func={func.__name__} | stage=START | pid={pid}")
+                
                 args = [_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {k: _batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v for k, v in kwargs.items()}
                 
                 if TQ_PROFILER_ENABLED and get_range_id is not None:
                     mark_end_range(get_range_id)
+                
+                if TQ_LOG_ENABLED:
+                    _tq_get_dur = time.perf_counter() - _tq_get_start
+                    tq_logger.info(f"[TQ-LOG] op=TQ_GET | func={func.__name__} | stage=END | duration={_tq_get_dur:.6f}s | pid={pid}")
                 
                 output = func(*args, **kwargs)
                 need_collect = _compute_need_collect(dispatch_mode, args)
@@ -478,10 +490,18 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                         mark_start_range, mark_end_range = _get_profiler_functions()
                         put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}")
                     
+                    if TQ_LOG_ENABLED:
+                        _tq_put_start = time.perf_counter()
+                        tq_logger.info(f"[TQ-LOG] op=TQ_PUT | func={func.__name__} | stage=START | pid={pid}")
+                    
                     updated_batch_meta = _update_batchmeta_with_output(output, batchmeta, func.__name__)
                     
                     if TQ_PROFILER_ENABLED and put_range_id is not None:
                         mark_end_range(put_range_id)
+                    
+                    if TQ_LOG_ENABLED:
+                        _tq_put_dur = time.perf_counter() - _tq_put_start
+                        tq_logger.info(f"[TQ-LOG] op=TQ_PUT | func={func.__name__} | stage=END | duration={_tq_put_dur:.6f}s | pid={pid}")
                     
                     return updated_batch_meta
                 return _postprocess_common(output, put_data, need_collect)
@@ -525,6 +545,10 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     mark_start_range, mark_end_range = _get_profiler_functions()
                     get_range_id = mark_start_range(message=f"TQ_GET:{func.__name__}")
                 
+                if TQ_LOG_ENABLED:
+                    _tq_get_start = time.perf_counter()
+                    tq_logger.info(f"[TQ-LOG] op=TQ_GET | func={func.__name__} | stage=START | pid={pid}")
+                
                 args = [await _async_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {
                     k: await _async_batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v
@@ -533,6 +557,10 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                 
                 if TQ_PROFILER_ENABLED and get_range_id is not None:
                     mark_end_range(get_range_id)
+                
+                if TQ_LOG_ENABLED:
+                    _tq_get_dur = time.perf_counter() - _tq_get_start
+                    tq_logger.info(f"[TQ-LOG] op=TQ_GET | func={func.__name__} | stage=END | duration={_tq_get_dur:.6f}s | pid={pid}")
                 
                 # ========== 日志点3: Get数据完成 ==========
                 get_end = time.perf_counter()
@@ -584,10 +612,18 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                         mark_start_range, mark_end_range = _get_profiler_functions()
                         put_range_id = mark_start_range(message=f"TQ_PUT:{func.__name__}")
                     
+                    if TQ_LOG_ENABLED:
+                        _tq_put_start = time.perf_counter()
+                        tq_logger.info(f"[TQ-LOG] op=TQ_PUT | func={func.__name__} | stage=START | pid={pid}")
+                    
                     updated_batchmeta = await _async_update_batchmeta_with_output(output, batchmeta, func.__name__)
                     
                     if TQ_PROFILER_ENABLED and put_range_id is not None:
                         mark_end_range(put_range_id)
+                    
+                    if TQ_LOG_ENABLED:
+                        _tq_put_dur = time.perf_counter() - _tq_put_start
+                        tq_logger.info(f"[TQ-LOG] op=TQ_PUT | func={func.__name__} | stage=END | duration={_tq_put_dur:.6f}s | pid={pid}")
                     
                     # ========== 日志点7: Put数据完成 ==========
                     put_end = time.perf_counter()
