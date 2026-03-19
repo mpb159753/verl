@@ -18,6 +18,7 @@ import inspect
 import logging
 import os
 import threading
+import time
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -41,6 +42,7 @@ except ImportError:
 
 
 from verl.protocol import DataProto
+from verl.utils.profiler import mark_end_range, mark_start_range
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -278,12 +280,25 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     f"Task {func.__name__} (pid={pid}) is getting len_samples={batchmeta.size}, "
                     f"global_idx={batchmeta.global_indexes}"
                 )
+                # GET phase: retrieve data from TransferQueue
+                get_range = mark_start_range(message=f"tqbridge/{func.__name__}/get", color="orange")
+                t_get_start = time.monotonic()
                 args = [_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {k: _batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v for k, v in kwargs.items()}
+                t_get_elapsed = time.monotonic() - t_get_start
+                mark_end_range(get_range)
+                logger.info(f"tqbridge/{func.__name__}/get elapsed: {t_get_elapsed:.4f}s")
+
                 output = func(*args, **kwargs)
                 need_collect = _compute_need_collect(dispatch_mode, args)
                 if put_data and need_collect:
+                    # PUT phase: store output data to TransferQueue
+                    put_range = mark_start_range(message=f"tqbridge/{func.__name__}/put", color="teal")
+                    t_put_start = time.monotonic()
                     updated_batch_meta = _update_batchmeta_with_output(output, batchmeta, func.__name__)
+                    t_put_elapsed = time.monotonic() - t_put_start
+                    mark_end_range(put_range)
+                    logger.info(f"tqbridge/{func.__name__}/put elapsed: {t_put_elapsed:.4f}s")
                     return updated_batch_meta
                 return _postprocess_common(output, put_data, need_collect)
 
@@ -297,15 +312,28 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
                     f"Task {func.__name__} (pid={pid}) is getting len_samples={batchmeta.size}, "
                     f"global_idx={batchmeta.global_indexes}"
                 )
+                # GET phase: retrieve data from TransferQueue
+                get_range = mark_start_range(message=f"tqbridge/{func.__name__}/get", color="orange")
+                t_get_start = time.monotonic()
                 args = [await _async_batchmeta_to_dataproto(arg) if isinstance(arg, BatchMeta) else arg for arg in args]
                 kwargs = {
                     k: await _async_batchmeta_to_dataproto(v) if isinstance(v, BatchMeta) else v
                     for k, v in kwargs.items()
                 }
+                t_get_elapsed = time.monotonic() - t_get_start
+                mark_end_range(get_range)
+                logger.info(f"tqbridge/{func.__name__}/get elapsed: {t_get_elapsed:.4f}s")
+
                 output = await func(*args, **kwargs)
                 need_collect = _compute_need_collect(dispatch_mode, args)
                 if put_data and need_collect:
+                    # PUT phase: store output data to TransferQueue
+                    put_range = mark_start_range(message=f"tqbridge/{func.__name__}/put", color="teal")
+                    t_put_start = time.monotonic()
                     updated_batchmeta = await _async_update_batchmeta_with_output(output, batchmeta, func.__name__)
+                    t_put_elapsed = time.monotonic() - t_put_start
+                    mark_end_range(put_range)
+                    logger.info(f"tqbridge/{func.__name__}/put elapsed: {t_put_elapsed:.4f}s")
                     return updated_batchmeta
                 return _postprocess_common(output, put_data, need_collect)
 

@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -77,6 +78,7 @@ from verl.utils.checkpoint.checkpoint_manager import (
 )
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.debug import marked_timer
+from verl.utils.profiler import mark_end_range, mark_start_range
 from verl.utils.metric import reduce_metrics
 from verl.utils.rollout_skip import RolloutSkip
 from verl.utils.seqlen_balancing import (
@@ -214,7 +216,11 @@ def compute_response_mask(batch_meta: BatchMeta, tq_client):
     Returns:
         BatchMeta: The BatchMeta of attention mask for the response tokens.
     """
+    get_range = mark_start_range(message="tq/compute_response_mask/get", color="orange")
+    t0 = time.monotonic()
     data = tq_client.get_data(batch_meta)
+    logging.info(f"tq/compute_response_mask/get elapsed: {time.monotonic() - t0:.4f}s")
+    mark_end_range(get_range)
 
     responses = data["responses"]
     response_length = responses.size(1)
@@ -222,7 +228,11 @@ def compute_response_mask(batch_meta: BatchMeta, tq_client):
     response_mask = attention_mask[:, -response_length:]
     output = TensorDict({"response_mask": response_mask}, batch_size=response_mask.size(0))
 
+    put_range = mark_start_range(message="tq/compute_response_mask/put", color="teal")
+    t0 = time.monotonic()
     batch_meta = tq_client.put(data=output, metadata=batch_meta)
+    logging.info(f"tq/compute_response_mask/put elapsed: {time.monotonic() - t0:.4f}s")
+    mark_end_range(put_range)
 
     return batch_meta
 
@@ -686,7 +696,11 @@ class RayPPOTrainer:
             if self.config.reward_model.enable and test_batch[0]["reward_model"]["style"] == "model":
                 return {}
 
+            _r = mark_start_range(message="tq/validate/put", color="teal")
+            _t0 = time.monotonic()
             batch_meta = self.tq_client.put(data=test_batch, partition_id=f"val_{self.global_steps - 1}")
+            logging.info(f"tq/validate/put elapsed: {time.monotonic() - _t0:.4f}s")
+            mark_end_range(_r)
 
             batch_meta.update_extra_info(
                 {
@@ -712,7 +726,11 @@ class RayPPOTrainer:
 
             # Store generated outputs
             test_response_meta = batch_meta.select_fields(["prompts", "responses", "uid", "reward_model"])
+            _r = mark_start_range(message="tq/validate/get_response", color="orange")
+            _t0 = time.monotonic()
             data = self.tq_client.get_data(test_response_meta)
+            logging.info(f"tq/validate/get_response elapsed: {time.monotonic() - _t0:.4f}s")
+            mark_end_range(_r)
             output_ids = data["responses"]
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
             sample_outputs.extend(output_texts)
@@ -1263,7 +1281,11 @@ class RayPPOTrainer:
                     batch_dict, repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True
                 )
                 batch: TensorDict = self.dict_to_tensordict(repeated_batch_dict)
+                _r = mark_start_range(message="tq/train/initial_put", color="teal")
+                _t0 = time.monotonic()
                 gen_meta = self.tq_client.put(data=batch, partition_id=f"train_{self.global_steps - 1}")
+                logging.info(f"tq/train/initial_put elapsed: {time.monotonic() - _t0:.4f}s")
+                mark_end_range(_r)
 
                 # pass global_steps to trace
                 gen_meta.set_extra_info("global_steps", self.global_steps)
@@ -1326,7 +1348,11 @@ class RayPPOTrainer:
                         batch_meta.reorder(balanced_idx)
 
                     # compute global_valid tokens
+                    _r = mark_start_range(message="tq/train/get_attention_mask", color="orange")
+                    _t0 = time.monotonic()
                     data = self.tq_client.get_data(attention_mask_meta)
+                    logging.info(f"tq/train/get_attention_mask elapsed: {time.monotonic() - _t0:.4f}s")
+                    mark_end_range(_r)
                     batch_meta.extra_info["global_token_num"] = torch.sum(data["attention_mask"], dim=-1).tolist()
 
                     with marked_timer("reward", timing_raw, color="yellow"):
@@ -1380,7 +1406,11 @@ class RayPPOTrainer:
                         old_log_prob_output_meta = self.actor_rollout_wg.compute_log_prob(old_log_prob_meta)
                         batch_meta = batch_meta.union(old_log_prob_output_meta)
 
+                        _r = mark_start_range(message="tq/train/get_old_log_prob", color="orange")
+                        _t0 = time.monotonic()
                         data = self.tq_client.get_data(old_log_prob_output_meta)
+                        logging.info(f"tq/train/get_old_log_prob elapsed: {time.monotonic() - _t0:.4f}s")
+                        mark_end_range(_r)
                         entropys = data["entropys"]
                         response_masks = data["response_mask"]
                         actor_config = self.config.actor_rollout_ref.actor
