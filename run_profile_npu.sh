@@ -104,7 +104,10 @@ export HCCL_SOCKET_IFNAME="${HCCL_SOCKET_IFNAME:-eth0}"
 # 环境准备（借鉴 run_roma.sh）
 # =====================================================
 # Ray 临时目录：将 /tmp/ray 软链到 /cache 避免容器 rootfs 溢出
-rm -rf /tmp/ray || true
+# 先强制清理残留 Ray 进程和旧 session 数据，防止 GCS session 冲突
+ray stop --force 2>/dev/null || true
+rm -rf /tmp/ray /dev/shm/ray_* /dev/shm/plasma_* || true
+rm -rf /cache/ray /cache/ray_tmp 2>/dev/null || true
 mkdir -p /cache/ray /cache/ray_tmp 2>/dev/null || true
 ln -s /cache/ray /tmp/ray 2>/dev/null || true
 export TMPDIR="${TMPDIR:-/cache/ray_tmp}"
