@@ -268,12 +268,13 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
 
     def decorator(func):
         pid = os.getpid()
-        # Lazy import to avoid circular import:
-        # transferqueue_utils → profiler.__init__ → profile.py → decorator → transferqueue_utils
-        from verl.utils.profiler import mark_end_range, mark_start_range
 
         @wraps(func)
         def inner(*args, **kwargs):
+            # Lazy import to avoid circular import:
+            # transferqueue_utils → profiler.__init__ → profile.py → decorator → transferqueue_utils
+            from verl.utils.profiler import mark_end_range, mark_start_range
+
             batchmeta = _find_batchmeta(*args, **kwargs)
             if batchmeta is None:
                 return func(*args, **kwargs)
@@ -306,6 +307,8 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None, put_data: bool = True):
 
         @wraps(func)
         async def async_inner(*args, **kwargs):
+            from verl.utils.profiler import mark_end_range, mark_start_range
+
             batchmeta = _find_batchmeta(*args, **kwargs)
             if batchmeta is None:
                 return await func(*args, **kwargs)
