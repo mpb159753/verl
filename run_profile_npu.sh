@@ -442,6 +442,7 @@ cleanup_resources() {
     rm -rf /dev/shm/ray_* 2>/dev/null || true
     rm -rf /dev/shm/plasma_* 2>/dev/null || true
     rm -rf /tmp/ray 2>/dev/null || true
+    rm -rf /cache/ray/* /cache/ray_tmp/* 2>/dev/null || true
     echo "资源清理完成"
 }
 
