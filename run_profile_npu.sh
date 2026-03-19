@@ -556,7 +556,7 @@ run_profile_test() {
         global_profiler.steps="${PROFILE_STEPS}" \
         global_profiler.save_path="${PROFILE_OUTPUT}" \
         transfer_queue.enable=${TQ_ENABLE_FLAG} \
-        '+ray_kwargs.ray_init.address=auto'
+        ${RAY_ADDRESS_ARG}
 
     echo "======================================"
     echo "测试 ${TEST_ID} 完成！Profile 输出: ${PROFILE_OUTPUT}"
@@ -640,11 +640,26 @@ declare -a TESTS_N=(
 ALL_TESTS=("${TESTS[@]}" "${TESTS_N[@]}")
 
 # =====================================================
-# 启动 Ray 集群
+# 启动 Ray 集群（仅多节点模式需要预启动）
 # =====================================================
-if [ -n "${VC_TASK_INDEX}" ] || [ "${SKIP_PROFILE}" = false ] || [ -n "${WORKER_IPS}" ]; then
+# 判断是否需要预启动 Ray 集群
+NEED_RAY_CLUSTER=false
+if [ -n "${VC_TASK_INDEX}" ]; then
+    # Volcano 模式，始终需要
+    NEED_RAY_CLUSTER=true
+elif [ -n "${WORKER_IPS}" ]; then
+    # SSH 多节点模式
+    NEED_RAY_CLUSTER=true
+fi
+
+if [ "${NEED_RAY_CLUSTER}" = true ]; then
     cleanup_resources
     start_ray_cluster
+    RAY_ADDRESS_ARG="'+ray_kwargs.ray_init.address=auto'"
+else
+    # 单机模式：让 main_ppo.py 内部 ray.init() 自动管理
+    log "单机模式：跳过 ray start，由 Python 内部 ray.init() 管理"
+    RAY_ADDRESS_ARG=""
 fi
 
 # =====================================================
