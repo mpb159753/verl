@@ -21,7 +21,7 @@ show_help() {
   --use-transfer-queue      启用 TransferQueue 模式（默认: 禁用，使用标准 main_ppo）
   --train-url PATH          指定输出根目录；output → PATH/output/，log → PATH/log/
                             默认: 脚本同级目录
-  --test ID                 只运行指定测试（如 S-01、N-M-04）
+  --test ID                 只运行指定测试（如 S-01、N-04）
   --nnodes N                只运行节点数为 N 的测试
   --with-stack              开启调用栈采集（profile contents: stack/module/npu/cpu）
   --analyse                 在 profile 结束后执行离线分析并清理原始数据
@@ -34,21 +34,22 @@ show_help() {
   --help                    显示此帮助并退出
 
 测试矩阵:
-  S 系列 (S-01~S-05): 固定 2 机 16 卡，覆盖 tiny→large 不同 put 体积
-    S-01: 0.5B + GSM8K        (Batch=64,   Seq=1024, TP=1, n=1, Micro=8) → ~2.7MB  (tiny)
-    S-02: 7B   + GSM8K        (Batch=256,  Seq=2048, TP=1, n=4, Micro=4) → ~88MB   (small)
-    S-03: 7B   + GSM8K+MATH   (Batch=512,  Seq=4096, TP=1, n=4, Micro=2) → ~370MB  (medium-low)
-    S-04: 14B  + GSM8K+MATH   (Batch=1024, Seq=8192, TP=2, n=4, Micro=1) → ~1.5GB  (medium)
-    S-05: 14B  + GSM8K+MATH   (Batch=2048, Seq=8192, TP=2, n=8, Micro=1) → ~5.9GB  (large)
+  设计原则: S 系列只变传输量(控制变量法), N 系列只变节点数
+  put 大小估算: batch × n × seqlen × 44B
 
-  N-M 系列: 14B medium (~1.5GB) 跨机规模对照
-    N-M-02: 2 机 16 卡  (Batch=1024, Seq=8192, TP=2, n=4, Micro=1)
-    N-M-04: 4 机 32 卡  (Batch=1024, Seq=8192, TP=2, n=4, Micro=1)
-    N-M-08: 8 机 64 卡  (Batch=1024, Seq=8192, TP=2, n=4, Micro=1)
+  S 系列 (S-00~S-05): 7B + GSM8K + TP=1, 只变 put 体积
+    S-00: 单机8卡 基线  (Batch=64,   Seq=2048, n=1, Micro=8) → ~  5MB  (tiny)
+    S-01: 2机16卡       (Batch=64,   Seq=2048, n=1, Micro=4) → ~  5MB  (tiny)
+    S-02: 2机16卡       (Batch=256,  Seq=2048, n=1, Micro=4) → ~ 22MB  (small)
+    S-03: 2机16卡       (Batch=256,  Seq=2048, n=4, Micro=4) → ~ 88MB  (medium-low)
+    S-04: 2机16卡       (Batch=512,  Seq=4096, n=4, Micro=2) → ~370MB  (medium)
+    S-05: 2机16卡       (Batch=1024, Seq=4096, n=4, Micro=1) → ~740MB  (large)
 
-  N-L 系列: 14B large (~5.9GB) 跨机规模对照
-    N-L-04: 4 机 32 卡  (Batch=2048, Seq=8192, TP=2, n=8, Micro=1)
-    N-L-08: 8 机 64 卡  (Batch=2048, Seq=8192, TP=2, n=8, Micro=1)
+  N 系列: 7B + GSM8K + TP=1, medium-low (~88MB), 跨机规模对照
+    N-01: 1 机  8 卡  (Batch=256, Seq=2048, n=4, Micro=8) — 单机基线
+    N-02: 2 机 16 卡  (Batch=256, Seq=2048, n=4, Micro=4)
+    N-04: 4 机 32 卡  (Batch=256, Seq=2048, n=4, Micro=4)
+    N-08: 8 机 64 卡  (Batch=256, Seq=2048, n=4, Micro=4)
 
 多节点启动模式:
   模式 A — Volcano Job（华为云 ModelArts / CCE，推荐）:
@@ -75,16 +76,10 @@ EOF
 # =====================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MODEL_QWEN_0_5B="${SCRIPT_DIR}/model/Qwen2.5-0.5B-Instruct"
 MODEL_QWEN_7B="${SCRIPT_DIR}/model/Qwen2.5-7B-Instruct"
-MODEL_QWEN_14B="${SCRIPT_DIR}/model/Qwen2.5-14B-Instruct"
 
 DATASET_GSM8K_TRAIN="${SCRIPT_DIR}/dataset/gsm8k/train.parquet"
 DATASET_GSM8K_TEST="${SCRIPT_DIR}/dataset/gsm8k/test.parquet"
-DATASET_MATH_TRAIN="${SCRIPT_DIR}/dataset/math/train.parquet"
-DATASET_MATH_TEST="${SCRIPT_DIR}/dataset/math/test.parquet"
-DATASET_COMBINED_TRAIN="[${DATASET_GSM8K_TRAIN},${DATASET_MATH_TRAIN}]"
-DATASET_COMBINED_TEST="[${DATASET_GSM8K_TEST},${DATASET_MATH_TEST}]"
 
 # =====================================================
 # Profile 配置
@@ -127,11 +122,6 @@ chmod -R 777 "${ASCEND_DIR}" 2>/dev/null || true
 [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ] && source /usr/local/Ascend/ascend-toolkit/set_env.sh || true
 
 log "Python: $(which python) ($(python -V 2>&1))"
-
-# 安装/校验差异依赖
-if [ -f "${SCRIPT_DIR}/diff_requirements.txt" ]; then
-    pip install -r "${SCRIPT_DIR}/diff_requirements.txt"
-fi
 
 # NPU 设备检查
 if command -v ascend-dmi >/dev/null 2>&1; then
@@ -480,7 +470,8 @@ run_profile_test() {
     local MICRO_BATCH=$8
     local NNODES=$9
     local ROLLOUT_N=${10}
-    local WITH_STACK_FLAG=${11}
+    local NGPUS_PER_NODE=${11}
+    local WITH_STACK_FLAG=${12}
 
     local PROFILE_CONTENTS='[]'
     if [ "${WITH_STACK_FLAG}" = "true" ]; then
@@ -546,7 +537,7 @@ run_profile_test() {
         trainer.logger='["console"]' \
         trainer.project_name="${PROJECT_NAME}" \
         trainer.experiment_name="${TEST_ID}" \
-        trainer.n_gpus_per_node=8 \
+        trainer.n_gpus_per_node="${NGPUS_PER_NODE}" \
         trainer.nnodes="${NNODES}" \
         trainer.save_freq=-1 \
         trainer.test_freq=-1 \
@@ -620,22 +611,32 @@ cleanup_profile_raw_data() {
 
 # =====================================================
 # 测试配置定义
-# gen_sequences put ≈ batch × n × seqlen × 44B
+# put 大小估算: batch × n × seqlen × 44B
+# 设计原则:
+#   S 系列: 固定模型(7B)/数据集(GSM8K)/TP(1), 只变 put 体积 → 传输量 vs 性能
+#   N 系列: 固定数据规模(~88MB), 只变节点数 → 跨节点扩展性
+#   对比方式: 每个配置分别以 --use-transfer-queue 和标准模式各跑一次
 # =====================================================
+
+# --- S 系列: 传输量梯度 (7B + GSM8K + TP=1) ---
+#  S-00 为单机8卡基线（无跨节点传输），其余 2 机 16 卡
+#                                                                                     Batch Seq  TP Micro Nodes n  NGPUS
 declare -a TESTS=(
-    "S-00 ${MODEL_QWEN_0_5B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 64 1024 1 8 1 1"  # 单机8卡: normalized_mini(64/8=8) 被 micro=8 整除
-    "S-01 ${MODEL_QWEN_0_5B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 64 1024 1 4 2 1"  # 2节点: normalized_mini(64/16=4) 需被 micro=4 整除
-    "S-02 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 256 2048 1 4 2 4"
-    "S-03 ${MODEL_QWEN_7B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 512 4096 1 2 2 4"
-    "S-04 ${MODEL_QWEN_14B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 1024 8192 2 1 2 4"
-    "S-05 ${MODEL_QWEN_14B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 2048 8192 2 1 2 8"
+    "S-00 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 64 2048 1 8 1 1 8"      # 单机基线: ~5MB,   mini(64/8=8)  ÷ micro=8 ✓
+    "S-01 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 64 2048 1 4 2 1 8"      # 2节点:   ~5MB,   mini(64/16=4) ÷ micro=4 ✓
+    "S-02 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 256 2048 1 4 2 1 8"     # 2节点:  ~22MB,   mini(256/16=16) ÷ micro=4 ✓
+    "S-03 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 256 2048 1 4 2 4 8"     # 2节点:  ~88MB,   mini(256/16=16) ÷ micro=4 ✓
+    "S-04 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 512 4096 1 2 2 4 8"     # 2节点: ~370MB,   mini(512/16=32) ÷ micro=2 ✓
+    "S-05 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 1024 4096 1 1 2 4 8"    # 2节点: ~740MB,   mini(1024/16=64) ÷ micro=1 ✓
 )
+
+# --- N 系列: 节点扩展梯度 (7B + GSM8K + TP=1, put ~88MB) ---
+#  N-01 为单机基线，N-02/04/08 为跨节点
 declare -a TESTS_N=(
-    "N-M-02 ${MODEL_QWEN_14B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 1024 8192 2 1 2 4"
-    "N-M-04 ${MODEL_QWEN_14B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 1024 8192 2 1 4 4"
-    "N-M-08 ${MODEL_QWEN_14B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 1024 8192 2 1 8 4"
-    "N-L-04 ${MODEL_QWEN_14B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 2048 8192 2 1 4 8"
-    "N-L-08 ${MODEL_QWEN_14B} ${DATASET_COMBINED_TRAIN} ${DATASET_COMBINED_TEST} 2048 8192 2 1 8 8"
+    "N-01 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 256 2048 1 8 1 4 8"     # 单机基线: mini(256/8=32) ÷ micro=8 ✓
+    "N-02 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 256 2048 1 4 2 4 8"     # 2节点:   mini(256/16=16) ÷ micro=4 ✓
+    "N-04 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 256 2048 1 4 4 4 8"     # 4节点:   mini(256/32=8) ÷ micro=4 ✓
+    "N-08 ${MODEL_QWEN_7B} ${DATASET_GSM8K_TRAIN} ${DATASET_GSM8K_TEST} 256 2048 1 4 8 4 8"     # 8节点:   mini(256/64=4) ÷ micro=4 ✓
 )
 ALL_TESTS=("${TESTS[@]}" "${TESTS_N[@]}")
 
@@ -667,7 +668,7 @@ fi
 # =====================================================
 if [ "${SKIP_PROFILE}" = false ]; then
     for test_config in "${ALL_TESTS[@]}"; do
-        read -r TEST_ID MODEL TRAIN VAL BATCH SEQ TP MICRO NODES ROLLN <<< "${test_config}"
+        read -r TEST_ID MODEL TRAIN VAL BATCH SEQ TP MICRO NODES ROLLN NGPUS <<< "${test_config}"
 
         if [ -n "${TEST_FILTER}" ] && [ "${TEST_ID}" != "${TEST_FILTER}" ]; then
             continue
@@ -688,7 +689,7 @@ if [ "${SKIP_PROFILE}" = false ]; then
         sleep 3
 
         run_profile_test "${TEST_ID}" "${MODEL}" "${TRAIN}" "${VAL}" \
-            "${BATCH}" "${SEQ}" "${TP}" "${MICRO}" "${NODES}" "${ROLLN}" "${WITH_STACK}"
+            "${BATCH}" "${SEQ}" "${TP}" "${MICRO}" "${NODES}" "${ROLLN}" "${NGPUS}" "${WITH_STACK}"
     done
 fi
 
